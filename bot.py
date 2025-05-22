@@ -1,127 +1,137 @@
-import logging
-import os # এনভায়রনমেন্ট ভ্যারিয়েবল পড়ার জন্য
+import os
+import telebot
 import requests
-from telegram import Update, Bot
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+import logging
 
-# --- বট কনফিগারেশন ---
-# এই মানগুলো হোস্টিং প্ল্যাটফর্মের Environment Variables থেকে আসবে।
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-LOG_CHANNEL_ID = os.environ.get("LOG_CHANNEL_ID") # এটি সাংখ্যিক আইডি হতে হবে
+# টেলিগ্রাম বট টোকেন এখানে দিন
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
-# লগিং কনফিগারেশন
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+if not BOT_TOKEN:
+    print("ত্রুটি: BOT_TOKEN এনভায়রনমেন্ট ভেরিয়েবল সেট করা নেই।")
+    exit()
 
-# লগ চ্যানেলে মেসেজ পাঠানোর ফাংশন
-def send_log_message(bot_instance: Bot, message_text: str):
-    if LOG_CHANNEL_ID:
+bot = telebot.TeleBot(BOT_TOKEN)
+logger = telebot.logger
+telebot.logger.setLevel(logging.INFO) # লগিং লেভেল সেট করা
+
+# Gofile.io সার্ভার পাওয়ার জন্য API এন্ডপয়েন্ট
+GOFILE_API_SERVER_URL = 'https://api.gofile.io/getServer'
+# ফাইল আপলোড করার জন্য Gofile.io API এন্ডপয়েন্ট (সার্ভার পাওয়ার পর ফরম্যাট করা হবে)
+GOFILE_UPLOAD_URL_FORMAT = 'https://{server}.gofile.io/uploadFile'
+
+# /start এবং /help কমান্ডের জন্য হ্যান্ডলার
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(message, "স্বাগতম! 👋\n\nআমাকে যেকোনো ফাইল পাঠান, আমি সেটি Gofile.io তে আপলোড করে আপনাকে ডাউনলোড লিংক দেবো।")
+
+# ডকুমেন্ট (যেকোনো ফাইল) হ্যান্ডলার
+@bot.message_handler(content_types=['document', 'video', 'audio', 'photo', 'voice', 'sticker'])
+def handle_docs(message):
+    try:
+        file_info = None
+        file_name = "uploaded_file" # ডিফল্ট ফাইলের নাম
+
+        if message.document:
+            file_info = bot.get_file(message.document.file_id)
+            file_name = message.document.file_name
+        elif message.video:
+            file_info = bot.get_file(message.video.file_id)
+            file_name = f"video_{message.video.file_id}.{message.video.mime_type.split('/')[1] if message.video.mime_type else 'mp4'}"
+        elif message.audio:
+            file_info = bot.get_file(message.audio.file_id)
+            file_name = f"audio_{message.audio.file_id}.{message.audio.mime_type.split('/')[1] if message.audio.mime_type else 'mp3'}"
+        elif message.photo:
+            # ছবিগুলো বিভিন্ন সাইজে আসে, সবচেয়ে বড়টা নিচ্ছি
+            file_info = bot.get_file(message.photo[-1].file_id)
+            file_name = f"photo_{message.photo[-1].file_id}.jpg"
+        elif message.voice:
+            file_info = bot.get_file(message.voice.file_id)
+            file_name = f"voice_{message.voice.file_id}.ogg"
+        elif message.sticker:
+            if message.sticker.is_animated or message.sticker.is_video:
+                bot.reply_to(message, "দুঃখিত, অ্যানিমেটেড বা ভিডিও স্টিকার আপলোড করা যাবে না। সাধারণ স্টিকার (webp) পাঠান।")
+                return
+            file_info = bot.get_file(message.sticker.file_id)
+            file_name = f"sticker_{message.sticker.file_id}.webp"
+
+        if not file_info:
+            bot.reply_to(message, "দুঃখিত, ফাইলটি প্রসেস করা যায়নি।")
+            return
+
+        # ব্যবহারকারীকে জানানো হচ্ছে যে ফাইল ডাউনলোড ও আপলোড শুরু হয়েছে
+        processing_message = bot.reply_to(message, "ফাইল প্রসেস করা হচ্ছে... ⏳")
+
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        # Gofile.io সার্ভার পাওয়া
         try:
-            numeric_log_channel_id = int(LOG_CHANNEL_ID)
-            bot_instance.send_message(chat_id=numeric_log_channel_id, text=message_text)
-            logger.info(f"Log sent to channel {LOG_CHANNEL_ID}")
-        except ValueError:
-            logger.error(f"LOG_CHANNEL_ID '{LOG_CHANNEL_ID}' is not a valid integer.")
-        except Exception as e:
-            logger.error(f"Failed to send log to channel {LOG_CHANNEL_ID}: {e}")
-    else:
-        logger.info("LOG_CHANNEL_ID not set. Skipping log message to channel. Logged to console: " + message_text)
+            server_response = requests.get(GOFILE_API_SERVER_URL)
+            server_response.raise_for_status() # HTTPエラーのチェック
+            server_data = server_response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Gofile সার্ভার পেতে সমস্যা: {e}")
+            bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text="দুঃখিত, Gofile.io সার্ভার পেতে সমস্যা হচ্ছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।")
+            return
+        except ValueError: # JSON ডিকোড সমস্যা
+            logger.error(f"Gofile সার্ভার রেসপন্স JSON পার্স করতে সমস্যা: {server_response.text}")
+            bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text="দুঃখিত, Gofile.io থেকে অপ্রত্যাশিত উত্তর এসেছে।")
+            return
 
-# /start কমান্ড হ্যান্ডলার
-def start(update: Update, context: CallbackContext):
-    user_name = update.effective_user.first_name
-    welcome_message = (
-        f"হাই {user_name}! 👋\n\n"
-        "আমি ফাইল আপলোড বট। আমাকে যেকোনো ফাইল (ডকুমেন্ট, ছবি, ভিডিও, অডিও) পাঠান,\n"
-        "আমি সেটি transfer.sh-এ আপলোড করে আপনাকে ডাউনলোড লিঙ্ক দেবো।"
-    )
-    update.message.reply_text(welcome_message)
-    send_log_message(context.bot, f"User {user_name} (ID: {update.effective_user.id}) started the bot.")
 
-# ফাইল হ্যান্ডলার (ডকুমেন্ট, ছবি, ভিডিও, অডিও)
-def handle_file(update: Update, context: CallbackContext):
-    message = update.message
-    user = update.effective_user
-    file_name_original = "unknown_file"
-    file_obj = None
+        if server_data.get('status') == 'ok':
+            server_name = server_data['data']['server']
+            upload_url = GOFILE_UPLOAD_URL_FORMAT.format(server=server_name)
 
-    if message.document:
-        file_obj = message.document
-        file_name_original = file_obj.file_name
-    elif message.photo:
-        file_obj = message.photo[-1]
-        file_name_original = f"photo_{file_obj.file_unique_id}.jpg"
-    elif message.video:
-        file_obj = message.video
-        file_name_original = file_obj.file_name if file_obj.file_name else f"video_{file_obj.file_unique_id}.mp4"
-    elif message.audio:
-        file_obj = message.audio
-        file_name_original = file_obj.file_name if file_obj.file_name else f"audio_{file_obj.file_unique_id}.mp3"
-    else:
-        message.reply_text("দুঃখিত, আমি শুধু সাধারণ ডকুমেন্ট, ছবি, ভিডিও বা অডিও ফাইল আপলোড করতে পারি।")
-        return
+            # ফাইল আপলোড করা
+            files = {'file': (file_name, downloaded_file)}
+            try:
+                upload_response = requests.post(upload_url, files=files)
+                upload_response.raise_for_status() # HTTPエラーのチェック
+                upload_data = upload_response.json()
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Gofile আপলোডে সমস্যা: {e}")
+                bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text="দুঃখিত, Gofile.io তে ফাইল আপলোড করতে সমস্যা হচ্ছে।")
+                return
+            except ValueError: # JSON ডিকোড সমস্যা
+                 logger.error(f"Gofile আপলোড রেসপন্স JSON পার্স করতে সমস্যা: {upload_response.text}")
+                 bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text="দুঃখিত, Gofile.io থেকে আপলোড করার পর অপ্রত্যাশিত উত্তর এসেছে।")
+                 return
 
-    if not file_obj:
-        message.reply_text("ফাইল পেতে সমস্যা হয়েছে।")
-        return
 
-    try:
-        bot_file = context.bot.get_file(file_obj.file_id)
-        file_content_bytes = bot_file.download_as_bytearray()
-        message.reply_text(f"'{file_name_original}' ফাইলটি পেয়েছি। transfer.sh-এ আপলোড করা হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন...")
-        log_msg_start = f"User {user.first_name} (ID: {user.id}) sent file: '{file_name_original}'. Starting upload."
-        send_log_message(context.bot, log_msg_start)
+            if upload_data.get('status') == 'ok':
+                download_page = upload_data['data']['downloadPage']
+                file_link = upload_data['data']['directLink'] if 'directLink' in upload_data['data'] else download_page # সরাসরি লিংক না থাকলে ডাউনলোড পেইজ লিংক
+                reply_text = f"✅ ফাইল সফলভাবে আপলোড হয়েছে!\n\n🔗 ডাউনলোড লিংক: {download_page}"
+                if 'directLink' in upload_data['data']: # কিছু ফাইলের ক্ষেত্রে ডিরেক্ট লিংক নাও থাকতে পারে
+                     reply_text += f"\n\n🔗 সরাসরি ডাউনলোড লিংক: {file_link} (এটি কিছু সময় পর কাজ নাও করতে পারে)"
 
-        safe_file_name = "".join(c if c.isalnum() or c in ('.', '_') else '_' for c in file_name_original)
-        if not safe_file_name:
-            safe_file_name = f"file_{file_obj.file_unique_id}"
-        upload_url = f"https://transfer.sh/{safe_file_name}"
-        
-        response = requests.put(upload_url, data=bytes(file_content_bytes))
-        response.raise_for_status()
-        download_link = response.text.strip()
-        
-        success_message = (
-            f"✅ '{file_name_original}' ফাইলটি সফলভাবে আপলোড হয়েছে!\n\n"
-            f"🔗 ডাউনলোড লিঙ্ক: {download_link}\n\n"
-            "(এই লিঙ্কটি সাধারণত ১৪ দিন পর্যন্ত فعال থাকবে)"
-        )
-        message.reply_text(success_message)
-        log_msg_success = f"Successfully uploaded '{file_name_original}' for user {user.first_name} (ID: {user.id}). Link: {download_link}"
-        send_log_message(context.bot, log_msg_success)
+                bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text=reply_text)
+                logger.info(f"ফাইল আপলোড সফল: {download_page}")
+            else:
+                error_message = upload_data.get('status')
+                logger.error(f"Gofile আপলোড ব্যর্থ: {error_message}")
+                bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text=f"দুঃখিত, Gofile.io তে ফাইল আপলোড করা যায়নি। কারণ: {error_message}")
+        else:
+            error_message = server_data.get('status')
+            logger.error(f"Gofile সার্ভার পেতে ব্যর্থ: {error_message}")
+            bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text=f"দুঃখিত, Gofile.io সার্ভার পাওয়া যায়নি। কারণ: {error_message}")
 
     except Exception as e:
-        logger.error(f"Error processing file for {user.first_name} (ID: {user.id}), File: '{file_name_original}': {e}", exc_info=True)
-        message.reply_text(f"'{file_name_original}' ফাইলটি আপলোড করার সময় একটি সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন অথবা অন্য ফাইল পাঠান।\nত্রুটি: {type(e).__name__}")
-        send_log_message(context.bot, f"Failed to upload '{file_name_original}' for user {user.first_name} (ID: {user.id}). Error: {type(e).__name__} - {e}")
+        logger.error(f"একটি অপ্রত্যাশিত ত্রুটি ঘটেছে: {e}")
+        try:
+            # যদি processing_message তৈরি হয়ে থাকে, তাহলে সেটি এডিট করার চেষ্টা করুন
+            if 'processing_message' in locals() and processing_message:
+                 bot.edit_message_text(chat_id=processing_message.chat.id, message_id=processing_message.message_id, text="দুঃখিত, একটি অপ্রত্যাশিত সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
+            else: # অন্যথায় নতুন মেসেজ পাঠান
+                 bot.reply_to(message, "দুঃখিত, একটি অপ্রত্যাশিত সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
+        except Exception as ex: # যদি মেসেজ এডিট বা রিপ্লাই করতেও সমস্যা হয়
+            logger.error(f"ত্রুটির মেসেজ পাঠাতেও সমস্যা: {ex}")
 
-def main():
-    if not BOT_TOKEN:
-        logger.critical("🔴 BOT_TOKEN is not set! The bot cannot start. Please set it as an environment variable.")
-        return
-    if not LOG_CHANNEL_ID:
-        logger.warning("🟡 LOG_CHANNEL_ID is not set! Log messages will not be sent to any Telegram channel, only to console.")
-
-    try:
-        startup_bot_instance = Bot(token=BOT_TOKEN)
-    except Exception as e:
-        logger.critical(f"🔴 Failed to create Bot instance with BOT_TOKEN. Error: {e}. The bot cannot start.")
-        return
-
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.document | Filters.photo | Filters.video | Filters.audio, handle_file))
-
-    send_log_message(startup_bot_instance, "🚀 বট সফলভাবে চালু হয়েছে এবং কানেক্টেড।")
-    logger.info("Bot has started polling...")
-    updater.start_polling()
-    updater.idle()
-    send_log_message(startup_bot_instance, "🛑 বট বন্ধ হয়ে যাচ্ছে।")
-    logger.info("Bot has stopped.")
 
 if __name__ == '__main__':
-    main()
+    print("বট চালু হচ্ছে...")
+    try:
+        bot.infinity_polling(logger_level=logging.INFO)
+    except Exception as e:
+        logger.error(f"বট চালু হতে সমস্যা: {e}")
+        print(f"বট চালু হতে সমস্যা: {e}")
