@@ -15,7 +15,7 @@ logger = telebot.logger
 telebot.logger.setLevel(logging.INFO) # লগিং লেভেল সেট করা
 
 # Gofile.io সার্ভার পাওয়ার জন্য API এন্ডপয়েন্ট
-GOFILE_API_SERVER_URL = 'https://api.gofile.io/getServer'
+GOFILE_API_SERVER_URL = 'https://api.gofile.io/getServers'
 # ফাইল আপলোড করার জন্য Gofile.io API এন্ডপয়েন্ট (সার্ভার পাওয়ার পর ফরম্যাট করা হবে)
 GOFILE_UPLOAD_URL_FORMAT = 'https://{server}.gofile.io/uploadFile'
 
