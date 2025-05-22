@@ -1,15 +1,10 @@
-# বেস ইমেজ হিসেবে পাইথনের একটি ভার্সন ব্যবহার করছি
-FROM python:3.9-slim
+FROM python:3.10-slim
 
-# ওয়ার্কিং ডিরেক্টরি সেট করছি
 WORKDIR /app
 
-# প্রয়োজনীয় ফাইলগুলো কপি করছি
-COPY requirements.txt requirements.txt
-COPY bot.py bot.py
-
-# pip ব্যবহার করে requirements.txt এ থাকা লাইব্রেরিগুলো ইনস্টল করছি
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# কন্টেইনার চালু হলে কোন কমান্ডটি রান হবে
+COPY bot.py .
+
 CMD ["python", "bot.py"]
