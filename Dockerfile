@@ -1,22 +1,15 @@
-# -----------------------------------------------------------------------------
-# Dockerfile for Telegram Bot
-# -----------------------------------------------------------------------------
-
-# ধাপ ১: বেস ইমেজ (Base Image)
+# বেস ইমেজ হিসেবে পাইথনের একটি ভার্সন ব্যবহার করছি
 FROM python:3.9-slim
 
-# ধাপ ২: এনভায়রনমেন্ট ভ্যারিয়েবল (Environment Variables) - ঐচ্ছিক
-ENV PYTHONUNBUFFERED 1
-
-# ধাপ ৩: ওয়ার্কিং ডিরেক্টরি (Working Directory)
+# ওয়ার্কিং ডিরেক্টরি সেট করছি
 WORKDIR /app
 
-# ধাপ ৪: ডিপেন্ডেন্সি ইনস্টলেশন (Dependency Installation)
-COPY requirements.txt .
+# প্রয়োজনীয় ফাইলগুলো কপি করছি
+COPY requirements.txt requirements.txt
+COPY bot.py bot.py
+
+# pip ব্যবহার করে requirements.txt এ থাকা লাইব্রেরিগুলো ইনস্টল করছি
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ধাপ ৫: সোর্স কোড কপি (Copy Source Code)
-COPY . .
-
-# ধাপ ৬: কমান্ড (Command to Run)
+# কন্টেইনার চালু হলে কোন কমান্ডটি রান হবে
 CMD ["python", "bot.py"]
