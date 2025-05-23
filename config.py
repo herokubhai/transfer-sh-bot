@@ -4,11 +4,11 @@ import os
 # Load configuration from environment variables
 # These will be set directly on Seenode.com or in your local environment.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-API_ID_STR = os.environ.get("API_ID")
-API_HASH = os.environ.get("API_HASH")
-SESSION_STRING = os.environ.get("SESSION_STRING")
-OWNER_ID_STR = os.environ.get("OWNER_ID")  # Optional
+BOT_TOKEN = os.environ.get("8154490037:AAHIZ5v7tmBt-xDYjfk1iAo68_dNm7sXwoY")
+API_ID_STR = os.environ.get("28203009")
+API_HASH = os.environ.get("c385478ec9a0c322964bdd56175cef7b")
+SESSION_STRING = os.environ.get("1AZWarzwBu3UVNQ3Eb6XzkxCdWBY7Uu0hAiSPivqs_PLVxnUT58gxWuCX3OLdKyxtafrkTfcsmQLxkL2g9bt8IwQ9SekQaT5KRxhq0f4fgypRtJIInUJEUJ5DgGrf6YZ8XtP9Gh9VOc8Lgi9ffcdIH9cWDLgX4g4EXwnchal90uYpaTfGXIpU1iA0d-DZqjc-arMQfWiOl3J40f2uROI9-4BlzXFeRH0dXs_BQx50zJR32jWgJ27bRwZAw0d6n_KENGu0jvpXz0oZ2K2Fp5Wigz_M5sJkBb0z5Xez1hXhKdrAzaRvyXYy1jQYpMLfU-g1-tjy22uEhRl_v5wRjFgchAJ-FwPK_1E=")
+OWNER_ID_STR = os.environ.get("6401029823")  # Optional
 
 # --- Validate and process mandatory variables ---
 if not BOT_TOKEN:
