@@ -7,10 +7,24 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 from telethon import TelegramClient, errors as telethon_errors
 from telethon.sessions import StringSession
-from dotenv import load_dotenv
+from dotenv import load_dotenv # dotenv লাইব্রেরি ইম্পোর্ট করা হয়েছে
 
-# Load .env file for local development (optional, for Seenode use direct env vars)
-load_dotenv()
+# --- Logging Setup (আগেই থাকবে) ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# --- Load Environment Variables ---
+# config.env ফাইল থেকে ভেরিয়েবল লোড করার চেষ্টা করা হবে (লোকাল ডেভেলপমেন্টের জন্য)
+# override=True দিলে .env ফাইলের ভেরিয়েবল সিস্টেমের ভেরিয়েবলকে ওভাররাইড করবে (যদি একই নামে থাকে)
+CONFIG_ENV_PATH = 'config.env'
+if load_dotenv(dotenv_path=CONFIG_ENV_PATH, override=True):
+    logger.info(f"Loaded environment variables from '{CONFIG_ENV_PATH}' for local development.")
+else:
+    logger.info(f"'{CONFIG_ENV_PATH}' not found. Relying on system environment variables (expected for production/Seenode).")
+
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
