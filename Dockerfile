@@ -10,13 +10,13 @@ COPY . /app
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make port 80 available to the world outside this container (if your bot needs a webhook, otherwise not strictly necessary for polling)
-# Seenode might manage ports differently, but it's good practice if webhooks were used.
-# For polling, it's not directly used by the bot for incoming connections from outside.
-# EXPOSE 80
-
-# Define environment variable for the bot token (you will set this in Seenode.com)
+# Environment variables to be set on Seenode or in .env file
 ENV BOT_TOKEN=""
+ENV API_ID=""
+ENV API_HASH=""
+ENV SESSION_STRING=""
+ENV OWNER_ID="" # Optional: Your Telegram User ID for error notifications
+ENV PYTHONUNBUFFERED=1
 
 # Run main.py when the container launches
 CMD ["python", "main.py"]
