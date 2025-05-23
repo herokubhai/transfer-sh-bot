@@ -6,26 +6,23 @@ import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from telegram.constants import ParseMode
-from telethon import TelegramClient, errors as telethon_errors
+# 'events' মডিউলটি এখানে সঠিকভাবে ইম্পোর্ট করা হয়েছে
+from telethon import TelegramClient, events, errors as telethon_errors
 from telethon.sessions import StringSession
 
 # --- Configuration is now imported from config.py ---
-# config.py is expected to load these from environment variables and validate them.
 try:
     from config import BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, OWNER_ID
 except ImportError:
-    # This log might not be visible if logging is not yet configured,
-    # so a print statement might also be useful for critical startup errors.
     print("CRITICAL: config.py not found. Please ensure it exists in the same directory as main.py.")
     logging.critical("FATAL: config.py not found. Please ensure it exists and is configured correctly.")
-    exit(1) # Exit if config cannot be imported
-except ValueError as e: # Handles errors from within config.py if env vars are missing/invalid
+    exit(1)
+except ValueError as e:
     print(f"CRITICAL: Configuration error from config.py: {e}")
     logging.critical(f"FATAL: Configuration error from config.py: {e}")
-    exit(1) # Exit if config.py raises an error during import
+    exit(1)
 
 # --- Logging Setup ---
-# Configure logging after importing config, in case config itself has logging settings (though not in this example)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s',
     level=logging.INFO
@@ -37,33 +34,23 @@ ptb_app_instance: Application = None
 
 # --- Gofile.io Helper ---
 def get_gofile_server():
-    """Gets the best available Gofile server or falls back to a default."""
     try:
         response = requests.get("https://api.gofile.io/getServer", timeout=10)
-        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+        response.raise_for_status()
         data = response.json()
         if data.get("status") == "ok":
             server = data.get("data", {}).get("server")
             if server:
                 logger.info(f"Using Gofile server: {server}")
                 return server
-            else:
-                logger.error("Gofile getServer response OK, but 'server' field not found in data.")
-        else:
-            logger.error(f"Gofile getServer responded with status: {data.get('status')}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error getting Gofile server (RequestException): {e}")
-    except ValueError as e: # Includes JSONDecodeError if response is not valid JSON
-        logger.error(f"Error decoding Gofile server response (ValueError): {e}")
-    except Exception as e: # Catch any other unexpected errors
-        logger.error(f"An unexpected error occurred in get_gofile_server: {e}", exc_info=True)
-    
-    logger.warning("Falling back to default Gofile server 'store1' due to issues.")
+        logger.error(f"Failed to get optimal Gofile server: {data}")
+    except Exception as e:
+        logger.error(f"Exception in get_gofile_server: {e}", exc_info=True)
+    logger.warning("Falling back to default Gofile server 'store1'")
     return "store1"
 
 # --- Telethon Client Setup ---
 user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH, base_logger=logger.getChild('TelethonClient'))
-
 
 # --- Core File Processing (using Telethon, now takes Telethon message object) ---
 async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id, telethon_file_message_obj, bot_status_message_id_in_user_chat):
@@ -71,10 +58,9 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
     temp_file_path = None 
 
     try:
-        # Determine original file name from Telethon message object
         if hasattr(telethon_file_message_obj, 'file') and hasattr(telethon_file_message_obj.file, 'name') and telethon_file_message_obj.file.name:
             original_file_name = telethon_file_message_obj.file.name
-        elif telethon_file_message_obj.document and hasattr(telethon_file_message_obj.document, 'attributes'): # Check attributes exist
+        elif telethon_file_message_obj.document and hasattr(telethon_file_message_obj.document, 'attributes'):
             original_file_name = next((attr.file_name for attr in telethon_file_message_obj.document.attributes if hasattr(attr, 'file_name') and attr.file_name), f"document_{telethon_file_message_obj.id}")
         elif telethon_file_message_obj.video and hasattr(telethon_file_message_obj.video, 'attributes'):
              original_file_name = next((attr.file_name for attr in telethon_file_message_obj.video.attributes if hasattr(attr, 'file_name') and attr.file_name), f"video_{telethon_file_message_obj.id}.mp4")
@@ -85,7 +71,6 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
         else:
             original_file_name = f"file_{telethon_file_message_obj.id}"
 
-
         logger.info(f"[UserAPI] Processing forwarded file '{original_file_name}' for original user {original_user_chat_id}")
         await ptb_bot_ref.edit_message_text(
             chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat,
@@ -93,7 +78,7 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
         )
         
         safe_filename_for_path = "".join(c if c.isalnum() or c in ['.', '_', '-'] else '_' for c in original_file_name)
-        if len(safe_filename_for_path) > 100: # Limit length
+        if len(safe_filename_for_path) > 100:
             name_part, ext_part = os.path.splitext(safe_filename_for_path)
             safe_filename_for_path = name_part[:100-len(ext_part)-1] + ext_part if ext_part else name_part[:100]
         temp_file_path = f"./temp_download_{safe_filename_for_path}"
@@ -117,21 +102,21 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
         with open(downloaded_file_path, 'rb') as f:
             files_payload = {'file': (original_file_name, f)}
             try:
-                response = requests.post(upload_url, files=files_payload, timeout=1800) # 30 mins
+                response = requests.post(upload_url, files=files_payload, timeout=1800) 
                 response.raise_for_status()
                 gofile_api_response = response.json()
             except requests.exceptions.Timeout:
                 logger.error(f"[UserAPI] Gofile.io upload timed out for {original_file_name}")
                 await ptb_bot_ref.edit_message_text(chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat, text="❌ Gofile.io আপলোড টাইম আউট হয়েছে। ফাইলটি খুব বড় অথবা সার্ভারে সমস্যা হতে পারে।")
-                return
+                return 
             except requests.exceptions.RequestException as e:
                 logger.error(f"[UserAPI] Gofile.io upload error for {original_file_name}: {e}")
                 await ptb_bot_ref.edit_message_text(chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat, text=f"❌ Gofile.io আপলোড ত্রুটি: {e}")
-                return
+                return 
             except ValueError: 
                  logger.error(f"[UserAPI] Gofile.io JSON decode error for {original_file_name}. Response text: {response.text if 'response' in locals() else 'N/A'}")
                  await ptb_bot_ref.edit_message_text(chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat, text="❌ Gofile.io থেকে উত্তর প্রক্রিয়াকরণে ত্রুটি।")
-                 return
+                 return 
 
         if gofile_api_response and gofile_api_response.get("status") == "ok":
             data_payload = gofile_api_response.get("data", {})
@@ -164,7 +149,6 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
     except telethon_errors.FloodWaitError as e:
         logger.warning(f"[UserAPI] Flood wait error: {e}. Waiting for {e.seconds} seconds.")
         await ptb_bot_ref.edit_message_text(chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat, text=f"⏳ টেলিগ্রাম কিছুক্ষণের জন্য অপেক্ষা করতে বলছে (Flood Wait: {e.seconds}s)। একটু পর আবার চেষ্টা করুন।")
-        # await asyncio.sleep(e.seconds + 5) # Caution: sleeping here blocks this handler. Task might be better.
     except Exception as e:
         logger.error(f"[UserAPI] Unexpected error in process_forwarded_file_via_user_api for '{original_file_name}': {e}", exc_info=True)
         await ptb_bot_ref.edit_message_text(chat_id=original_user_chat_id, message_id=bot_status_message_id_in_user_chat, text=f"❌ একটি অপ্রত্যাশিত ত্রুটি ঘটেছে ফাইল প্রসেসিং এর সময়: {str(e)[:200]}")
@@ -175,7 +159,6 @@ async def process_forwarded_file_via_user_api(ptb_bot_ref, original_user_chat_id
                 logger.info(f"[UserAPI] Cleaned up temporary file: {temp_file_path}")
             except Exception as e_clean:
                 logger.error(f"[UserAPI] Error cleaning up temp file {temp_file_path}: {e_clean}")
-
 
 # --- PTB (Bot Frontend) Handlers ---
 async def start_command_ptb(update: Update, context: CallbackContext):
@@ -192,8 +175,8 @@ async def file_handler_ptb(update: Update, context: CallbackContext):
     user = update.effective_user
     original_user_chat_id = message.chat_id
     
-    if not OWNER_ID: # OWNER_ID must be set for the forwarding logic to work
-        logger.error("PTB: OWNER_ID is not configured in environment variables. Cannot forward file for processing by User API.")
+    if not OWNER_ID: 
+        logger.error("PTB: OWNER_ID is not configured. Cannot forward file for processing by User API.")
         await message.reply_text("❌ দুঃখিত, বট সঠিকভাবে কনফিগার করা হয়নি (বট অ্যাডমিনের আইডি সেট করা নেই)। ফাইল প্রসেস করা সম্ভব হচ্ছে না।")
         return
 
@@ -201,14 +184,12 @@ async def file_handler_ptb(update: Update, context: CallbackContext):
     logger.info(f"PTB: Received file from user {user.id}. Forwarding to OWNER_ID ({OWNER_ID}) for processing.")
 
     try:
-        # Forward the message with the file to the OWNER_ID (Telethon client's account)
         forwarded_msg_to_owner = await context.bot.forward_message(
-            chat_id=OWNER_ID, # This must be the User ID of the account Telethon is logged into
+            chat_id=OWNER_ID, 
             from_chat_id=original_user_chat_id,
             message_id=message.message_id
         )
         
-        # Send metadata as a separate message *replying to the forwarded file* in the OWNER_ID's chat
         metadata_text = (
             f"FORWARDED_FOR_PROCESSING\n"
             f"ORIGINAL_USER_CHAT_ID:{original_user_chat_id}\n"
@@ -217,7 +198,7 @@ async def file_handler_ptb(update: Update, context: CallbackContext):
         await context.bot.send_message(
             chat_id=OWNER_ID,
             text=metadata_text,
-            reply_to_message_id=forwarded_msg_to_owner.message_id # Crucial: reply to the forwarded message
+            reply_to_message_id=forwarded_msg_to_owner.message_id 
         )
         
         await bot_status_msg.edit_text("✅ ফাইলটি আপনার ব্যক্তিগত অ্যাকাউন্টে (ব্যাকএন্ডে) প্রসেসিং এর জন্য সফলভাবে পাঠানো হয়েছে। সম্পন্ন হলে এখানে লিঙ্ক দেওয়া হবে।")
@@ -227,12 +208,13 @@ async def file_handler_ptb(update: Update, context: CallbackContext):
 
 
 # --- Telethon (User Backend) Event Handler ---
-@user_client.on(events.NewMessage(incoming=True, chats=OWNER_ID)) # Listen to messages in OWNER_ID's chat
+# '@user_client.on(...)' এই ডেকোরেটরটি ফাংশনের ঠিক উপরে থাকতে হবে।
+# এটি মডিউল লোড হওয়ার সময় রেজিস্টার হয়।
+@user_client.on(events.NewMessage(incoming=True, chats=OWNER_ID)) 
 async def user_api_event_handler(event):
-    message = event.message # This is the metadata message from the bot
+    message = event.message 
     logger.debug(f"[UserAPI] Received message in OWNER_ID chat: '{message.text[:100] if message.text else 'No text'}'")
 
-    # Check if this message is the metadata message and if it's a reply
     if message.text and message.text.startswith("FORWARDED_FOR_PROCESSING") and message.is_reply:
         try:
             lines = message.text.splitlines()
@@ -246,22 +228,22 @@ async def user_api_event_handler(event):
             original_user_chat_id = int(original_user_chat_id_str)
             bot_status_message_id = int(bot_status_message_id_str)
             
-            replied_to_msg_id = message.reply_to_message_id # ID of the forwarded file message
+            replied_to_msg_id = message.reply_to_message_id 
             file_message_obj = await user_client.get_messages(OWNER_ID, ids=replied_to_msg_id)
 
             if file_message_obj and file_message_obj.media:
                 logger.info(f"[UserAPI] Identified file to process (ID: {file_message_obj.id} in OWNER_ID chat) via reply mechanism for original user {original_user_chat_id}.")
                 
-                # Access the global ptb_app_instance (defined at module level, assigned in main_hybrid_async)
+                # এখানে `global ptb_app_instance` লাইনটি আর নেই।
+                # সরাসরি মডিউল-লেভেলে থাকা ptb_app_instance ব্যবহার করা হবে।
                 if not ptb_app_instance:
                     logger.error("[UserAPI] PTB application instance (ptb_app_instance) is not available for Telethon handler to send reply.")
-                    return # Cannot proceed without PTB bot instance
+                    return 
 
-                # Create a new task so this handler can return quickly
                 asyncio.create_task(process_forwarded_file_via_user_api(
-                    ptb_bot_ref=ptb_app_instance.bot, # Pass the PTB bot object
+                    ptb_bot_ref=ptb_app_instance.bot, 
                     original_user_chat_id=original_user_chat_id,
-                    telethon_file_message_obj=file_message_obj, # The actual message with media
+                    telethon_file_message_obj=file_message_obj, 
                     bot_status_message_id_in_user_chat=bot_status_message_id
                 ))
             else:
@@ -272,10 +254,8 @@ async def user_api_event_handler(event):
         except Exception as e:
             logger.error(f"[UserAPI] General error processing metadata message in Telethon handler: {e}", exc_info=True)
     
-    # Handle direct file uploads to OWNER_ID by the owner themselves (for their own use)
-    # Ensure this doesn't conflict with the metadata message logic
     elif not (message.text and message.text.startswith("FORWARDED_FOR_PROCESSING")) and \
-         event.is_private and event.media and event.chat_id == OWNER_ID and message.sender_id == OWNER_ID:
+         event.is_private and event.media and event.chat_id == OWNER_ID and message.sender_id == OWNER_ID: # Direct file from owner
             logger.info(f"[UserAPI] Direct file received in chat with self (OWNER_ID: {OWNER_ID}). Processing for self.")
             try:
                 status_msg_for_self = await user_client.send_message(OWNER_ID, "🔄 আপনার নিজের পাঠানো ফাইল প্রসেস করা হচ্ছে...", reply_to=message.id)
@@ -296,7 +276,6 @@ async def user_api_event_handler(event):
 
 
 async def error_handler_ptb(update: object, context: CallbackContext) -> None:
-    """Log Errors caused by PTB Updates and optionally notify OWNER_ID."""
     logger.error(msg="[PTB] Exception while handling an PTB update:", exc_info=context.error)
     if OWNER_ID and isinstance(context.error, Exception):
         try:
@@ -318,17 +297,15 @@ async def error_handler_ptb(update: object, context: CallbackContext) -> None:
 
 # --- Main Application Setup and Run ---
 async def main_hybrid_async():
-    global ptb_app_instance # Declare that we will assign to the global ptb_app_instance
+    global ptb_app_instance 
 
-    # 1. Start and authorize Telethon client (User API part)
     logger.info("Attempting to start Telethon client (User API)...")
     try:
         await user_client.connect()
         if not await user_client.is_user_authorized():
-            logger.critical("Telethon client (user account) IS NOT AUTHORIZED. SESSION_STRING is likely invalid or expired. Please regenerate it using generate_session.py and update the environment variable. The bot cannot function for large files without this.")
+            logger.critical("Telethon client (user account) IS NOT AUTHORIZED. SESSION_STRING is likely invalid or expired.")
             if OWNER_ID:
                 try: 
-                    # Try sending message via user_client itself IF it's connected but not authorized
                     if user_client.is_connected():
                         await user_client.send_message(OWNER_ID, "🔴 জরুরি সতর্কবার্তা: Telethon ক্লায়েন্ট (ইউজার অ্যাকাউন্ট) অনুমোদিত নয়! SESSION_STRING সম্ভবত ভুল বা মেয়াদোত্তীর্ণ। বট বড় ফাইল প্রসেস করতে পারবে না।")
                 except Exception as e_auth_notify:
@@ -347,9 +324,7 @@ async def main_hybrid_async():
         logger.critical("The bot will not be able to process large files. Please check API_ID, API_HASH, SESSION_STRING and network connectivity.")
         return
 
-    # 2. Setup PTB application (Bot API part)
     logger.info("Initializing PTB Application (Bot API)...")
-    # Assign to the global instance here
     ptb_app_instance = Application.builder().token(BOT_TOKEN).build()
 
     ptb_app_instance.add_handler(CommandHandler("start", start_command_ptb))
@@ -359,7 +334,6 @@ async def main_hybrid_async():
     ))
     ptb_app_instance.add_error_handler(error_handler_ptb)
 
-    # 3. Run PTB polling alongside Telethon client
     logger.info("Starting PTB Bot polling...")
     try:
         await ptb_app_instance.initialize()
@@ -368,7 +342,7 @@ async def main_hybrid_async():
         
         logger.info("✅ Hybrid Bot is now running! (PTB Polling and Telethon Client active)")
         
-        await user_client.run_until_disconnected() # This keeps the main script alive for Telethon
+        await user_client.run_until_disconnected() 
 
     except Exception as e_main_run:
         logger.critical(f"FATAL: An error occurred while running the main hybrid application: {e_main_run}", exc_info=True)
@@ -391,16 +365,19 @@ async def main_hybrid_async():
 
 
 if __name__ == "__main__":
-    if not all([BOT_TOKEN, API_ID, API_HASH, SESSION_STRING]): # OWNER_ID is optional but recommended for this hybrid setup
+    if not all([BOT_TOKEN, API_ID, API_HASH, SESSION_STRING]): 
         print("❌ CRITICAL ERROR: Core environment variables missing (BOT_TOKEN, API_ID, API_HASH, SESSION_STRING).")
         print("   These should be loaded via config.py from your environment.")
         print("   The bot will not start.")
         exit(1)
     
-    if not OWNER_ID:
-        logger.warning("Warning: OWNER_ID is not set. The bot's file forwarding mechanism for large files relies on OWNER_ID. Please set it for full functionality.")
-        # Depending on strictness, you might choose to exit(1) here too if OWNER_ID is critical for your flow.
-        # For now, it will log a warning and try to run, but file forwarding will fail.
+    if not OWNER_ID: # OWNER_ID is crucial for the forwarding logic
+        logger.warning("CRITICAL Warning: OWNER_ID is not set in config.py / environment. The bot's file forwarding mechanism for large files relies on OWNER_ID. Please set it for full functionality, otherwise the bot will not be able to process files correctly.")
+        # You might want to exit here if OWNER_ID is absolutely critical for operation
+        # exit(1) 
+        print("❌ CRITICAL ERROR: OWNER_ID is not set. This is required for the bot to function correctly.")
+        exit(1)
+
 
     try:
         asyncio.run(main_hybrid_async())
