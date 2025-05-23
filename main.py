@@ -2,7 +2,8 @@ import logging
 import os
 import requests
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, Filters, CallbackContext
+# Corrected import for filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
 # Enable logging
 logging.basicConfig(
@@ -17,7 +18,7 @@ if not BOT_TOKEN:
     exit(1)
 
 # Gofile.io API endpoint for uploading
-GOFILE_API_URL = "https://store1.gofile.io/uploadFile" # It's good practice to find the best server dynamically
+# GOFILE_API_URL = "https://store1.gofile.io/uploadFile" # This will be dynamic
 
 def get_gofile_server():
     """Gets the best available Gofile server."""
@@ -30,7 +31,7 @@ def get_gofile_server():
     except requests.exceptions.RequestException as e:
         logger.error(f"Error getting Gofile server: {e}")
     except KeyError:
-        logger.error(f"Unexpected response format from Gofile getServer: {data}")
+        logger.error(f"Unexpected response format from Gofile getServer.") # Removed data from log for brevity
     return "store1" # Fallback server
 
 # Handler for /start command
@@ -44,37 +45,41 @@ async def start(update: Update, context: CallbackContext) -> None:
 async def handle_file(update: Update, context: CallbackContext) -> None:
     """Handles file uploads, uploads them to Gofile.io, and sends back the link."""
     message = update.message
+    file_to_upload = None
+    file_type_for_name = "file" # Default for naming
+
     if message.document:
         file_to_upload = message.document
-        file_type = "document"
+        file_type_for_name = "document"
     elif message.video:
         file_to_upload = message.video
-        file_type = "video"
+        file_type_for_name = "video"
     elif message.audio:
         file_to_upload = message.audio
-        file_type = "audio"
+        file_type_for_name = "audio"
     elif message.photo:
         # For photos, telegram sends multiple sizes. We'll take the largest one.
         file_to_upload = message.photo[-1]
-        file_type = "photo"
+        file_type_for_name = "photo"
     else:
         await message.reply_text("Sorry, I can only handle documents, videos, audio files, and photos.")
         return
 
     try:
         bot_message = await message.reply_text("Downloading your file...")
-        new_file = await file_to_upload.get_file()
-        file_path = new_file.file_path # This is a temporary URL from Telegram
+        # Using context.bot.get_file for v20+
+        new_file = await context.bot.get_file(file_to_upload.file_id)
 
         # Download the file from Telegram
-        tg_file_response = requests.get(file_path, stream=True)
-        tg_file_response.raise_for_status()
+        # We need to download it to memory or a temporary file to send with requests
+        file_bytes = await new_file.download_as_bytearray()
 
-        file_name = file_to_upload.file_name
+
+        file_name = getattr(file_to_upload, 'file_name', None) # Works for document, video, audio
         if not file_name:
             # Generate a filename if not available (e.g., for photos)
-            extension = file_path.split('.')[-1].split('?')[0] # get extension
-            file_name = f"{file_type}_{file_to_upload.file_unique_id}.{extension}"
+            extension = new_file.file_path.split('.')[-1].split('?')[0] if new_file.file_path else 'jpg'
+            file_name = f"{file_type_for_name}_{file_to_upload.file_unique_id}.{extension}"
 
 
         await bot_message.edit_text(f"Uploading '{file_name}' to Gofile.io...")
@@ -83,7 +88,7 @@ async def handle_file(update: Update, context: CallbackContext) -> None:
         server = get_gofile_server()
         upload_url = f"https://{server}.gofile.io/uploadFile"
 
-        files = {'file': (file_name, tg_file_response.content)}
+        files = {'file': (file_name, bytes(file_bytes))} # Send bytes directly
 
         # Upload to Gofile.io
         gofile_response = requests.post(upload_url, files=files)
@@ -92,25 +97,36 @@ async def handle_file(update: Update, context: CallbackContext) -> None:
 
         if gofile_data.get("status") == "ok":
             download_link = gofile_data["data"]["downloadPage"]
-            await bot_message.edit_text(
+            admin_code = gofile_data["data"].get("adminCode", "N/A") # Get adminCode safely
+            response_text = (
                 f"File uploaded successfully!\n\n"
                 f"Name: {gofile_data['data']['fileName']}\n"
-                f"Download Link: {download_link}\n"
-                f"Admin Code (to manage file): {gofile_data['data']['adminCode']}"
+                f"Download Link: {download_link}"
             )
+            if admin_code != "N/A":
+                 response_text += f"\nAdmin Code (to manage file): {admin_code}"
+            await bot_message.edit_text(response_text)
         else:
-            logger.error(f"Gofile.io API error: {gofile_data.get('status')}")
-            await bot_message.edit_text(f"Sorry, something went wrong while uploading to Gofile.io. Error: {gofile_data.get('status')}")
+            error_message = gofile_data.get('status', 'Unknown Gofile error')
+            logger.error(f"Gofile.io API error: {error_message} - Full response: {gofile_data}")
+            await bot_message.edit_text(f"Sorry, something went wrong while uploading to Gofile.io. Error: {error_message}")
 
-    except telegram.error.TelegramError as e:
-        logger.error(f"Telegram API error: {e}")
-        await message.reply_text(f"A Telegram error occurred: {e}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error: {e}")
-        await bot_message.edit_text(f"A network error occurred while trying to upload your file: {e}")
+    except AttributeError as e: # To catch potential issues if file_to_upload doesn't have expected attributes
+        logger.error(f"Attribute error likely with file object: {e}", exc_info=True)
+        await message.reply_text(f"An error occurred processing the file metadata: {e}")
+    # telegram.error.TelegramError is not the base class for all errors in v20+
+    # Use telegram.error.TelegramError for specific telegram errors if needed, or a more general exception
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-        await bot_message.edit_text(f"An unexpected error occurred: {e}")
+        # Check if bot_message exists before trying to edit it
+        if 'bot_message' in locals() and bot_message:
+            try:
+                await bot_message.edit_text(f"An unexpected error occurred: {e}")
+            except Exception as edit_e: # If editing fails
+                logger.error(f"Failed to edit message with error: {edit_e}")
+                await message.reply_text(f"An unexpected error occurred: {e}")
+        else:
+            await message.reply_text(f"An unexpected error occurred: {e}")
 
 
 def main() -> None:
@@ -122,10 +138,13 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
 
     # on non command i.e message - handle the file
+    # Corrected usage of filters
     application.add_handler(MessageHandler(
-        Filters.Document.ALL | Filters.VIDEO | Filters.AUDIO | Filters.PHOTO,
+        filters.ChatType.PRIVATE & (filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO),
         handle_file
     ))
+    # If you want the bot to work in groups too, you can remove filters.ChatType.PRIVATE
+    # or add another handler for groups. For simplicity, this one is for private chats.
 
     # Log all errors
     application.add_error_handler(error_handler)
@@ -136,7 +155,7 @@ def main() -> None:
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     """Log Errors caused by Updates."""
-    logger.warning('Update "%s" caused error "%s"', update, context.error)
+    logger.error('Update "%s" caused error "%s"', update, context.error, exc_info=context.error)
 
 
 if __name__ == '__main__':
